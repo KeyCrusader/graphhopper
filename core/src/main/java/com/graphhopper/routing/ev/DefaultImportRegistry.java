@@ -330,6 +330,20 @@ public class DefaultImportRegistry implements ImportRegistry {
                     (lookup, props) -> new MountainBikePriorityParser(lookup),
                     VehicleSpeed.key("mtb"), BikeNetwork.KEY
             );
+
+        /*
+         * Reads all of the values from the OSSpeedPeriod enum and checks against them.
+         * Passes through the period to the edge and stores the data.
+         */
+        else if (OSSpeedPeriod.contains(name)) {
+            final OSSpeedPeriod period = OSSpeedPeriod.valueOf(name);
+            return ImportUnit.create(name, props -> OSSpeed.create(period),
+                    (lookup, props) -> new OSSpeedParser(
+                            lookup.getDecimalEncodedValue(period.name()),
+                            period)
+            );
+        }
+
         return null;
     }
 }
