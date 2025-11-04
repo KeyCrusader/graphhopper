@@ -1,10 +1,7 @@
 package com.graphhopper.routing.util.parsers;
 
 import com.graphhopper.reader.ReaderWay;
-import com.graphhopper.routing.ev.DecimalEncodedValue;
-import com.graphhopper.routing.ev.EdgeIntAccess;
-import com.graphhopper.routing.ev.EnumEncodedValue;
-import com.graphhopper.routing.ev.RouteNetwork;
+import com.graphhopper.routing.ev.*;
 import com.graphhopper.routing.util.FerrySpeedCalculator;
 import com.graphhopper.routing.util.PriorityCode;
 import com.graphhopper.storage.IntsRef;
@@ -13,11 +10,8 @@ import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import static com.graphhopper.routing.ev.RouteNetwork.*;
 import static com.graphhopper.routing.util.PriorityCode.*;
 import static com.graphhopper.routing.util.parsers.AbstractAccessParser.INTENDED;
-import static com.graphhopper.routing.util.parsers.AbstractAverageSpeedParser.getMaxSpeed;
-import static com.graphhopper.routing.util.parsers.AbstractAverageSpeedParser.isValidSpeed;
 
 public abstract class BikeCommonPriorityParser implements TagParser {
 
@@ -35,7 +29,6 @@ public abstract class BikeCommonPriorityParser implements TagParser {
     // Car speed limit which switches the preference from UNCHANGED to AVOID_IF_POSSIBLE
     int avoidSpeedLimit;
     EnumEncodedValue<RouteNetwork> bikeRouteEnc;
-    Map<RouteNetwork, Integer> routeMap = new HashMap<>();
     protected final Set<String> goodSurface = Set.of("paved", "asphalt", "concrete");
 
     // This is the specific bicycle class
@@ -47,7 +40,6 @@ public abstract class BikeCommonPriorityParser implements TagParser {
         this.priorityEnc = priorityEnc;
         this.avgSpeedEnc = avgSpeedEnc;
 
-        // duplicate code as also in BikeCommonAverageSpeedParser
         addPushingSection("footway");
         addPushingSection("pedestrian");
         addPushingSection("steps");
@@ -78,18 +70,18 @@ public abstract class BikeCommonPriorityParser implements TagParser {
         avoidHighwayTags.put("secondary_link", AVOID);
         avoidHighwayTags.put("bridleway", AVOID);
 
-        routeMap.put(INTERNATIONAL, BEST.getValue());
-        routeMap.put(NATIONAL, BEST.getValue());
-        routeMap.put(REGIONAL, VERY_NICE.getValue());
-        routeMap.put(LOCAL, PREFER.getValue());
-
         avoidSpeedLimit = 71;
     }
 
     @Override
     public void handleWayTags(int edgeId, EdgeIntAccess edgeIntAccess, ReaderWay way, IntsRef relationFlags) {
         String highwayValue = way.getTag("highway");
-        Integer priorityFromRelation = routeMap.get(bikeRouteEnc.getEnum(false, edgeId, edgeIntAccess));
+        Integer priorityFromRelation = null;
+        switch (bikeRouteEnc.getEnum(false, edgeId, edgeIntAccess)) {
+            case INTERNATIONAL, NATIONAL -> priorityFromRelation = BEST.getValue();
+            case REGIONAL, LOCAL -> priorityFromRelation = VERY_NICE.getValue();
+        }
+
         if (highwayValue == null) {
             if (FerrySpeedCalculator.isFerry(way)) {
                 priorityFromRelation = SLIGHT_AVOID.getValue();
@@ -155,7 +147,7 @@ public abstract class BikeCommonPriorityParser implements TagParser {
     void collect(ReaderWay way, double wayTypeSpeed, TreeMap<Double, PriorityCode> weightToPrioMap) {
         String highway = way.getTag("highway");
         if (isDesignated(way)) {
-            boolean isGoodSurface = way.getTag("tracktype", "").equals("grade1") || goodSurface.contains(way.getTag("surface",""));
+            boolean isGoodSurface = way.getTag("tracktype", "").equals("grade1") || goodSurface.contains(way.getTag("surface", ""));
             if ("path".equals(highway) || "track".equals(highway) && isGoodSurface)
                 weightToPrioMap.put(100d, VERY_NICE);
             else
@@ -169,15 +161,15 @@ public abstract class BikeCommonPriorityParser implements TagParser {
                 weightToPrioMap.put(100d, VERY_NICE);
         }
 
-        double maxSpeed = Math.max(getMaxSpeed(way, false), getMaxSpeed(way, true));
-        if (preferHighwayTags.contains(highway) || (isValidSpeed(maxSpeed) && maxSpeed <= 30)) {
-            if (!isValidSpeed(maxSpeed) || maxSpeed < avoidSpeedLimit) {
+        double maxSpeed = Math.max(OSMMaxSpeedParser.parseMaxSpeed(way, false), OSMMaxSpeedParser.parseMaxSpeed(way, true));
+        if (preferHighwayTags.contains(highway) || maxSpeed <= 30) {
+            if (maxSpeed == MaxSpeed.MAXSPEED_MISSING || maxSpeed < avoidSpeedLimit) {
                 weightToPrioMap.put(40d, PREFER);
                 if (way.hasTag("tunnel", INTENDED))
                     weightToPrioMap.put(40d, UNCHANGED);
             }
         } else if (avoidHighwayTags.containsKey(highway)
-                || isValidSpeed(maxSpeed) && maxSpeed >= avoidSpeedLimit && !"track".equals(highway)) {
+                || (maxSpeed != MaxSpeed.MAXSPEED_MISSING && maxSpeed >= avoidSpeedLimit && !"track".equals(highway))) {
             PriorityCode priorityCode = avoidHighwayTags.get(highway);
             weightToPrioMap.put(50d, priorityCode == null ? AVOID : priorityCode);
             if (way.hasTag("tunnel", INTENDED)) {
@@ -214,7 +206,7 @@ public abstract class BikeCommonPriorityParser implements TagParser {
             weightToPrioMap.put(50d, AVOID_MORE);
 
         if (way.hasTag("lcn", "yes"))
-            weightToPrioMap.put(100d, PREFER);
+            weightToPrioMap.put(100d, VERY_NICE);
 
         String classBicycleValue = way.getTag(classBicycleKey);
         if (classBicycleValue != null) {
@@ -239,7 +231,6 @@ public abstract class BikeCommonPriorityParser implements TagParser {
                 || way.hasTag("bicycle_road", "yes") || way.hasTag("cyclestreet", "yes") || way.hasTag("bicycle", "official");
     }
 
-    // TODO duplicated in average speed
     void addPushingSection(String highway) {
         pushingSectionsHighways.add(highway);
     }

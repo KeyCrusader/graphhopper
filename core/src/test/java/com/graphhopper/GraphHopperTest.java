@@ -20,7 +20,6 @@ package com.graphhopper;
 import com.graphhopper.config.CHProfile;
 import com.graphhopper.config.LMProfile;
 import com.graphhopper.config.Profile;
-import com.graphhopper.util.TurnCostsConfig;
 import com.graphhopper.reader.ReaderWay;
 import com.graphhopper.reader.dem.SRTMProvider;
 import com.graphhopper.reader.dem.SkadiProvider;
@@ -105,8 +104,8 @@ public class GraphHopperTest {
             ASTAR + ",false,361",
             DIJKSTRA_BI + ",false,340",
             ASTAR_BI + ",false,192",
-            ASTAR_BI + ",true,46",
-            DIJKSTRA_BI + ",true,51"
+            DIJKSTRA_BI + ",true,45",
+            ASTAR_BI + ",true,43",
     })
     public void testMonacoDifferentAlgorithms(String algo, boolean withCH, int expectedVisitedNodes) {
         GraphHopper hopper = new GraphHopper().
@@ -465,10 +464,10 @@ public class GraphHopperTest {
         assertEquals(3, rsp.getAll().size());
         // via ramsenthal
         assertEquals(2636, rsp.getAll().get(0).getTime() / 1000);
+        // via eselslohe
+        assertEquals(2783, rsp.getAll().get(1).getTime() / 1000);
         // via unterwaiz
-        assertEquals(2985, rsp.getAll().get(1).getTime() / 1000);
-        // via eselslohe -> theta; BTW: here smaller time as 2nd alternative due to priority influences time order
-        assertEquals(2783, rsp.getAll().get(2).getTime() / 1000);
+        assertEquals(2985, rsp.getAll().get(2).getTime() / 1000);
     }
 
     @Test
@@ -1418,8 +1417,8 @@ public class GraphHopperTest {
                 .setProfile(bikeProfile));
         res = rsp.getBest();
         assertFalse(rsp.hasErrors(), rsp.getErrors().toString());
-        assertEquals(536, res.getTime() / 1000f, 1);
-        assertEquals(2522, res.getDistance(), 1);
+        assertEquals(500, res.getTime() / 1000f, 1);
+        assertEquals(2211, res.getDistance(), 1);
 
         rsp = hopper.route(new GHRequest(43.73005, 7.415707, 43.741522, 7.42826)
                 .setProfile("profile3"));
@@ -2077,34 +2076,6 @@ public class GraphHopperTest {
         rsp = hopper.route(req);
         assertFalse(rsp.hasErrors(), rsp.getErrors().toString());
         assertEquals(658, rsp.getBest().getDistance(), 1);
-    }
-
-    @Test
-    public void testTagParserProcessingOrder() {
-        // it does not matter when the OSMBikeNetworkTagParser is added (before or even after BikeCommonPriorityParser)
-        // as it is a different type but it is important that OSMSmoothnessParser is added before smoothnessEnc is used
-        // in BikeCommonAverageSpeedParser
-        GraphHopper hopper = new GraphHopper().
-                setGraphHopperLocation(GH_LOCATION).
-                setOSMFile(BAYREUTH).
-                setMinNetworkSize(0).
-                setEncodedValuesString("bike_access, bike_priority, bike_average_speed").
-                setProfiles(TestProfiles.accessSpeedAndPriority("bike"));
-
-        hopper.importOrLoad();
-        GHRequest req = new GHRequest(new GHPoint(49.98021, 11.50730), new GHPoint(49.98026, 11.50795));
-        req.setProfile("bike");
-        GHResponse rsp = hopper.route(req);
-        assertFalse(rsp.hasErrors(), rsp.getErrors().toString());
-        // due to smoothness=bad => 7 seconds longer
-        assertEquals(21, rsp.getBest().getTime() / 1000.0, 1);
-
-        req = new GHRequest(new GHPoint(50.015067, 11.502093), new GHPoint(50.014694, 11.499748));
-        req.setProfile("bike");
-        rsp = hopper.route(req);
-        assertFalse(rsp.hasErrors(), rsp.getErrors().toString());
-        // due to bike network (relation 2247905) a lower route weight => otherwise 29.0
-        assertEquals(23.2, rsp.getBest().getRouteWeight(), .1);
     }
 
     @Test

@@ -40,6 +40,9 @@ import com.graphhopper.util.exceptions.PointOutOfBoundsException;
 import com.graphhopper.util.shapes.GHPoint;
 import io.dropwizard.testing.junit5.DropwizardAppExtension;
 import io.dropwizard.testing.junit5.DropwizardExtensionsSupport;
+import jakarta.ws.rs.client.Entity;
+import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.Response;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -47,9 +50,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
-import javax.ws.rs.client.Entity;
-import javax.ws.rs.core.MediaType;
-import javax.ws.rs.core.Response;
 import java.io.File;
 import java.util.*;
 
@@ -91,10 +91,14 @@ public class RouteResourceTest {
                 putObject("import.osm.ignored_highways", "").
                 putObject("graph.location", DIR).
                 // adding this so the corresponding check is not just skipped...
-                putObject(MAX_NON_CH_POINT_DISTANCE, 10e6).
-                putObject("graph.encoded_values", "road_class, surface, road_environment, max_speed, country, car_access, car_average_speed").
-                setProfiles(Collections.singletonList(TestProfiles.accessAndSpeed("my_car", "car"))).
-                setCHProfiles(Collections.singletonList(new CHProfile("my_car")));
+                        putObject(MAX_NON_CH_POINT_DISTANCE, 10e6).
+                putObject("routing.snap_preventions_default", "tunnel, bridge, ferry").
+                putObject("graph.encoded_values", "road_class, surface, road_environment, max_speed, country, " +
+                        "car_access, car_average_speed, " +
+                        "foot_access, foot_priority, foot_average_speed").
+                setProfiles(List.of(TestProfiles.accessAndSpeed("my_car", "car"),
+                        TestProfiles.accessSpeedAndPriority("foot"))).
+                setCHProfiles(List.of(new CHProfile("my_car"), new CHProfile("foot")));
         return config;
     }
 
@@ -290,9 +294,9 @@ public class RouteResourceTest {
 
         List<PathDetail> edgeIdDetails = pathDetails.get("edge_id");
         assertEquals(78, edgeIdDetails.size());
-        assertEquals(924L, edgeIdDetails.get(0).getValue());
+        assertEquals(822L, edgeIdDetails.get(0).getValue());
         assertEquals(2, edgeIdDetails.get(0).getLength());
-        assertEquals(925L, edgeIdDetails.get(1).getValue());
+        assertEquals(844L, edgeIdDetails.get(1).getValue());
         assertEquals(9, edgeIdDetails.get(1).getLength());
 
         long expectedTime = rsp.getBest().getTime();
@@ -333,6 +337,7 @@ public class RouteResourceTest {
         JsonNode infoJson = json.get("info");
         assertFalse(infoJson.has("errors"));
         JsonNode path = json.get("paths").get(0);
+        assertEquals(9203.674, path.get("distance").asDouble(), .1);
         assertTrue(path.has("details"));
         JsonNode details = path.get("details");
         assertTrue(details.has("average_speed"));
@@ -345,8 +350,8 @@ public class RouteResourceTest {
         JsonNode edgeIds = details.get("edge_id");
         int firstLink = edgeIds.get(0).get(2).asInt();
         int lastLink = edgeIds.get(edgeIds.size() - 1).get(2).asInt();
-        assertEquals(924, firstLink);
-        assertEquals(1584, lastLink);
+        assertEquals(822, firstLink);
+        assertEquals(1630, lastLink);
 
         JsonNode maxSpeed = details.get("max_speed");
         assertEquals("[0,34,50.0]", maxSpeed.get(0).toString());
@@ -385,17 +390,32 @@ public class RouteResourceTest {
     }
 
     @Test
-    public void testSnapPreventions() {
-        GraphHopperWeb hopper = new GraphHopperWeb(clientUrl(app, "route"));
-        GHRequest request = new GHRequest(42.511139, 1.53285, 42.508165, 1.532271);
-        request.setProfile("my_car");
-        GHResponse rsp = hopper.route(request);
-        assertFalse(rsp.hasErrors(), rsp.getErrors().toString());
-        assertEquals(490, rsp.getBest().getDistance(), 2);
+    public void testFootInstructionForReverseCarOnewayInRoundabout() {
+        JsonNode json = clientTarget(app, "/route?profile=foot&" +
+                "point=42.512263%2C1.535468&point=42.512938%2C1.534875").request().get(JsonNode.class);
+        JsonNode path = json.get("paths").get(0);
+        assertEquals(103, path.get("distance").asDouble(), 1);
+        JsonNode n = path.get("instructions").get(1);
+        assertEquals("At roundabout, take exit 1 onto Avigunda Sant Antoni, Avinguda Fiter i Rossell", n.get("text").asText());
+    }
 
-        request.setSnapPreventions(Collections.singletonList("tunnel"));
-        rsp = hopper.route(request);
-        assertEquals(1081, rsp.getBest().getDistance(), 2);
+    @Test
+    public void testSnapPreventions() {
+        for (boolean postRequest : List.of(true, false)) {
+            GraphHopperWeb hopper = new GraphHopperWeb(clientUrl(app, "route"));
+            hopper.setPostRequest(postRequest);
+            GHRequest request = new GHRequest(42.511139, 1.53285, 42.508165, 1.532271);
+            request.setProfile("my_car");
+            GHResponse rsp = hopper.route(request);
+            assertFalse(rsp.hasErrors(), rsp.getErrors().toString());
+            assertEquals(1081, rsp.getBest().getDistance(), 2, rsp.getBest().getDistance() + " with post " + postRequest);
+
+            // overwrite default:
+            request.setSnapPreventions(List.of());
+            rsp = hopper.route(request);
+            assertFalse(rsp.hasErrors(), rsp.getErrors().toString());
+            assertEquals(490, rsp.getBest().getDistance(), 2, rsp.getBest().getDistance() + " with post " + postRequest);
+        }
     }
 
     @Test
@@ -500,7 +520,7 @@ public class RouteResourceTest {
         assertTrue(ex instanceof IllegalArgumentException, "Wrong exception found: " + ex.getClass().getName()
                 + ", IllegalArgumentException expected.");
         assertTrue(ex.getMessage().contains("The requested profile 'SPACE-SHUTTLE' does not exist." +
-                "\nAvailable profiles: [my_car]"), ex.getMessage());
+                "\nAvailable profiles: [my_car, foot]"), ex.getMessage());
 
         // an IllegalArgumentException from inside the core is written as JSON, unknown profile
         response = getWithStatus(clientTarget(app, "/route?profile=SPACE-SHUTTLE&point=42.554851,1.536198&point=42.510071,1.548128"));
@@ -623,6 +643,37 @@ public class RouteResourceTest {
         assertEquals(400, response.getStatus());
         JsonNode json = response.getBody();
         assertEquals("The number of 'heading' parameters must be zero, one or equal to the number of points (1)", json.get("message").asText());
+    }
+
+    @Test
+    public void testPostWithNullHeadings() {
+        // Test that null values in headings array are accepted and converted to NaN (issue #3192)
+        String jsonStr = "{ \"profile\": \"my_car\", " +
+                "\"points\": [[1.536198,42.554851], [1.548128, 42.510071]], " +
+                "\"headings\": [10, null], " +
+                "\"ch.disable\": true }";
+        JsonNode json = clientTarget(app, "/route").request().post(Entity.json(jsonStr), JsonNode.class);
+        JsonNode infoJson = json.get("info");
+        assertFalse(infoJson.has("errors"));
+        JsonNode path = json.get("paths").get(0);
+        double distance = path.get("distance").asDouble();
+
+        // The route should succeed despite the null in headings
+        assertTrue(distance > 9000, "distance wasn't correct:" + distance);
+        assertTrue(distance < 9500, "distance wasn't correct:" + distance);
+
+        // Also test mixing null with "NaN" string for backward compatibility
+        jsonStr = "{ \"profile\": \"my_car\", " +
+                "\"points\": [[1.536198,42.554851], [1.548128, 42.510071]], " +
+                "\"headings\": [null, \"NaN\"], " +
+                "\"ch.disable\": true }";
+        json = clientTarget(app, "/route").request().post(Entity.json(jsonStr), JsonNode.class);
+        infoJson = json.get("info");
+        assertFalse(infoJson.has("errors"));
+        path = json.get("paths").get(0);
+        distance = path.get("distance").asDouble();
+        assertTrue(distance > 9000, "distance wasn't correct:" + distance);
+        assertTrue(distance < 9500, "distance wasn't correct:" + distance);
     }
 
     @ParameterizedTest
